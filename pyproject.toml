@@ -1,0 +1,49 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "colab-phage-assembly"
+version = "0.1.0"
+description = "Phage Assembly & Annotation Pipeline"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = ["anywidget>=0.9.0", "traitlets>=5.0.0", "ipython>=7.0.0"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/boilerplate", "src/pipeline"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/boilerplate/widget.js" = "boilerplate/widget.js"
+
+[tool.pixi.workspace]
+channels = ["conda-forge", "bioconda"]
+platforms = ["osx-arm64", "linux-64"]
+
+[tool.pixi.dependencies]
+python = "3.10.*"
+fastqc = "*"
+trim-galore = "*"
+unicycler = "*"
+mmseqs2 = "*"
+mash = "*"
+prodigal = "*"
+aragorn = "*"
+trnascan-se = "*"
+phanotate = "*"
+minced = "*"
+dnaapler = "*"
+
+[tool.pixi.pypi-dependencies]
+colab-phage-assembly = { path = ".", editable = true }
+pharokka = "*"
+quast = "*"
+
+[tool.pixi.environments]
+default = { solve-group = "default" }
+dev = { features = ["dev"], solve-group = "default" }
+
+[tool.pixi.feature.dev.dependencies]
+pytest = "*"
+pytest-mock = "*"
+ruff = "*"
