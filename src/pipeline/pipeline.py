@@ -5,6 +5,7 @@ import sys
 import platform
 import shutil
 import site
+import time
 
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -69,8 +70,10 @@ class PhagePipeline(Pipeline):
             return -1
 
         # Diagnostics
-
         env = os.environ.copy()
+        # Force unbuffered IO for Python scripts
+        env["PYTHONUNBUFFERED"] = "1"
+        
         python_bin = str(Path(sys.executable).parent)
         machine = platform.machine()
         is_apple_silicon = (machine == "arm64") or (platform.system() == "Darwin" and "Apple" in platform.processor())
@@ -79,32 +82,61 @@ class PhagePipeline(Pipeline):
         if python_bin not in env.get("PATH", ""):
             env["PATH"] = python_bin + os.pathsep + env.get("PATH", "")
 
-        # Trace what we are about to run
         logger.write(f"Executing: {cmd}\n")
+        # Allow time for the widget log to flush to the UI
+        time.sleep(0.1)
         
-        # Determine if we need to force arm64
-        # We do this for ALL commands on Apple Silicon to be safe, 
-        # as Rosetta persistence can be sticky in some subshell configurations.
         if is_apple_silicon and platform.system() == "Darwin":
             if not cmd.startswith("arch -arm64"):
                 cmd = f"arch -arm64 {cmd}"
 
+        # Use unbuffered binary mode to read output immediately
         self._current_process = subprocess.Popen(
             cmd, 
             shell=True, 
             stdout=subprocess.PIPE, 
             stderr=subprocess.STDOUT, 
-            text=True, 
+            text=False, 
             cwd=str(cwd) if cwd else None,
-            env=env
+            env=env,
+            bufsize=0 # Unbuffered
         )
         
+        import codecs
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        
+        output_buffer = []
+        last_flush = time.time()
+        
         try:
-            for line in iter(self._current_process.stdout.readline, ""):
-                if self._stop_requested:
-                    self._current_process.terminate()
-                    break
-                logger.write(line)
+            while True:
+                # Read byte-by-byte to ensure we capture progress bars etc.
+                char = self._current_process.stdout.read(1)
+                
+                if not char:
+                    if self._current_process.poll() is not None:
+                        break
+                    continue
+                    
+                decoded_char = decoder.decode(char, final=False)
+                if decoded_char:
+                    output_buffer.append(decoded_char)
+                    
+                    # Check flush conditions: Newline, Carriage Return (progress bar), or Time elapsed
+                    current_time = time.time()
+                    if "\n" in decoded_char or "\r" in decoded_char or (current_time - last_flush > 0.2):
+                        if self._stop_requested:
+                            self._current_process.terminate()
+                            break
+                        
+                        logger.write("".join(output_buffer))
+                        output_buffer = []
+                        last_flush = current_time
+                        
+            # Final flush
+            if output_buffer:
+                logger.write("".join(output_buffer))
+                    
         except Exception as e:
             logger.write(f"Error reading output: {e}\n")
             
@@ -209,36 +241,50 @@ class PhagePipeline(Pipeline):
 
     def run(self, params: Dict[str, Any], logger) -> bool:
         self._stop_requested = False
-        project_name = params.get("output_name", "phage_project")
-        output_dir = Path.cwd() / project_name
-        output_dir.mkdir(parents=True, exist_ok=True)
         
-        logger.write(f"❯ Project name: {project_name}\n")
-        logger.write(f"❯ Output directory: {output_dir}\n\n")
-
-        # 1. Inputs
-        logger.write("\n--- Stage: Input Validation ---\n")
-        logger.write(f"DEBUG: All params: {params}\n")
-        r1 = params.get("short_r1")
-        r2 = params.get("short_r2")
-        
-        logger.write(f"R1: {r1}\n")
-        logger.write(f"R2: {r2}\n")
-
-        if not r1:
-            logger.write("❯ Error: R1 input is required. Please provide a path to the first fastq file.\n")
+        # Defensive: Ensure logger works immediately
+        try:
+            logger.write("❯ Initializing...\n")
+        except Exception as e:
+            print(f"Logger failed: {e}")
             return False
 
-        if not Path(r1).exists():
-            logger.write(f"❯ Error: R1 file not found at: {r1}\n")
-            return False
+        try:
+            project_name = params.get("output_name", "phage_project")
+            output_dir = Path.cwd() / project_name
+            output_dir.mkdir(parents=True, exist_ok=True)
             
-        if r2 and not Path(r2).exists():
-            logger.write(f"❯ Error: R2 file not found at: {r2}\n")
-            # We don't necessarily fail here if R2 is just optional single-end, 
-            # but if they provided a path that completely doesn't exist, it's likely a typo.
-            # However, looking at logic, r2 is optional. 
-            # If r2 is provided (truthy), it usually means the user intended paired end.
+            logger.write(f"❯ Project name: {project_name}\n")
+            logger.write(f"❯ Output directory: {output_dir}\n")
+            
+            # Debug params
+            logger.write(f"DEBUG: Params received: {str(params)}\n")
+
+            # 1. Inputs
+            logger.write("\n--- Stage: Input Validation ---\n")
+            
+            r1 = params.get("short_r1")
+            r2 = params.get("short_r2")
+            
+            logger.write(f"R1: {r1}\n")
+            logger.write(f"R2: {r2}\n")
+
+            if not r1:
+                logger.write("❯ Error: R1 input is required. Please provide a path to the first fastq file.\n")
+                return False
+
+            if not Path(r1).exists():
+                logger.write(f"❯ Error: R1 file not found at: {r1}\n")
+                return False
+                
+            if r2 and not Path(r2).exists():
+                logger.write(f"❯ Error: R2 file not found at: {r2}\n")
+                return False
+                
+        except Exception as e:
+            logger.write(f"❯ Critical Error during setup: {e}\n")
+            import traceback
+            logger.write(traceback.format_exc())
             return False
 
         # 2. Preprocessing

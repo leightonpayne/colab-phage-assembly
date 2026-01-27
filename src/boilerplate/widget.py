@@ -1,6 +1,6 @@
-
 from pathlib import Path
 import threading
+import time
 
 import anywidget
 import traitlets
@@ -32,6 +32,8 @@ class PipelineWidget(anywidget.AnyWidget):
     result_file_name = traitlets.Unicode("").tag(sync=True)
     result_file_data = traitlets.Unicode("").tag(sync=True)
     
+    is_colab = traitlets.Bool(False).tag(sync=True)
+    
     def __init__(self, pipeline: Pipeline, **kwargs):
         self.pipeline = pipeline
         
@@ -52,6 +54,13 @@ class PipelineWidget(anywidget.AnyWidget):
         kwargs.setdefault("params_schema", params_schema)
         kwargs.setdefault("config", config)
         kwargs.setdefault("params_values", initial_values)
+        kwargs.setdefault("is_colab", check_colab())
+        
+        # Initialize internal state BEFORE observers or super()
+        self._log_history = "" 
+        self._log_lock = threading.Lock()
+        self._last_sync_time = 0
+        self._sync_threshold = 0.2 # 200ms
         
         super().__init__(**kwargs)
         self._setup_observers()
@@ -59,11 +68,31 @@ class PipelineWidget(anywidget.AnyWidget):
         # Start keepalive if in Colab
         if check_colab():
             keep_alive_thread()
+            
+    def _append_log(self, text: str):
+        msg = str(text)
+        with self._log_lock:
+            self._log_history += msg
+            # Throttled sync to traitlet for local viewers/fallback
+            # Skip in Colab to avoid congestion
+            if not check_colab():
+                now = time.time()
+                if now - self._last_sync_time > self._sync_threshold:
+                    self.logs = self._log_history
+                    self._last_sync_time = now
+            
+        # File debug
+        try:
+            with open("pipeline_debug.log", "a") as f:
+                f.write(msg)
+        except:
+            pass
         
     def _setup_observers(self):
         self.observe(self._on_run_requested, names=["run_requested"])
         self.observe(self._on_terminate_requested, names=["terminate_requested"])
         self.observe(self._on_action_requested, names=["action_requested"])
+        self.on_msg(self._handle_custom_msg)
 
     def _on_terminate_requested(self, change):
         if not change.new: return
@@ -82,14 +111,24 @@ class PipelineWidget(anywidget.AnyWidget):
         self.run_requested = False
         self.status_state = "running"
         self.status_message = "Pipeline running..."
-        self.logs = "" # Clear logs or keep? Let's clear for new run
+        
+        with self._log_lock:
+            self._log_history = ""
+            self.logs = "" 
+            
         self.result_file_data = "" # Clear previous result
         self.result_file_name = ""
         
         def append_log(text: str):
-            self.logs = (self.logs or "") + text
+            self._append_log(text)
+
+
             
         def run_thread():
+            # Clear debug file on new run
+            with open("pipeline_debug.log", "w") as f:
+                f.write("--- NEW RUN ---\n")
+                
             try:
                 success = False
 
@@ -104,9 +143,9 @@ class PipelineWidget(anywidget.AnyWidget):
                     success = self.pipeline.run(self.params_values, log_writer)
                 
                 if success:
+                    append_log("\n❯ Completed successfully!\n")
                     self.status_state = "finished"
                     self.status_message = "Completed successfully"
-                    append_log("\n❯ Completed successfully!\n")
                     
                     # Process result file
                     try:
@@ -129,21 +168,65 @@ class PipelineWidget(anywidget.AnyWidget):
                         append_log(f"❯ Error preparing download: {e}\n")
                         
                 elif getattr(self.pipeline, "_stop_requested", False):
+                    append_log("\n❯ Pipeline was terminated.\n")
                     self.status_state = "aborted"
                     self.status_message = "Terminated by user"
-                    append_log("\n❯ Pipeline was terminated.\n")
                 else:
+                    append_log("\n❯ Pipeline failed.\n")
                     self.status_state = "error"
                     self.status_message = "Failed"
-                    append_log("\n❯ Pipeline failed.\n")
                     
             except Exception as e:
+                import traceback
+                trace = traceback.format_exc()
+                append_log(f"\n❯ Exception: {e}\n{trace}\n")
                 self.status_state = "error"
                 self.status_message = f"Error: {e}"
-                append_log(f"\n❯ Exception: {e}\n")
+            
+            finally:
+                # Wrap up
+                import time
+                time.sleep(0.1)
+                
+                with self._log_lock:
+                    final_logs = self._log_history
+                    # Still update traitlet for consistency
+                    self.logs = final_logs
+                
+                # Send explicit notification with payload for Colab reliability
+                self.send({
+                    "type": "run_finished", 
+                    "status": self.status_state,
+                    "logs": final_logs,
+                    "result_file_name": self.result_file_name,
+                    "result_file_data": self.result_file_data
+                })
         
         # Run in thread to not block UI
         threading.Thread(target=run_thread, daemon=True).start()
+
+    def _handle_custom_msg(self, content, buffers):
+        """Handle incoming messages from JS (Polling)."""
+        if content.get("type") == "poll":
+            start_offset = content.get("offset", 0)
+            
+            with self._log_lock:
+                total_len = len(self._log_history)
+                
+                # Always return current status and total offset
+                # This bypasses traitlet sync lag in Colab
+                msg = {
+                    "type": "log_batch",
+                    "content": "",
+                    "new_offset": total_len,
+                    "status": self.status_state
+                }
+                
+                if start_offset < total_len:
+                    msg["content"] = self._log_history[start_offset:]
+                
+                self.send(msg)
+
 
     def _on_action_requested(self, change):
         if not change.new: 
@@ -154,7 +237,11 @@ class PipelineWidget(anywidget.AnyWidget):
         self.action_requested = ""
         
         self.status_state = "running"
-        self.logs = f"❯ Executing action: {action_name}...\n"
+        with self._log_lock:
+            self._log_history = ""
+            self.logs = ""
+            
+        self._append_log(f"❯ Executing action: {action_name}...\n")
         
         def _target(logger):
             try:
@@ -163,8 +250,24 @@ class PipelineWidget(anywidget.AnyWidget):
             except Exception as e:
                 logger.write(f"❯ Action error: {str(e)}\n")
                 self.status_state = "error"
+            finally:
+                # Wrap up
+                time.sleep(0.1)
+                with self._log_lock:
+                    final_logs = self._log_history
+                    self.logs = final_logs
+                    
+                self.send({
+                    "type": "run_finished", 
+                    "status": self.status_state,
+                    "logs": final_logs,
+                    "result_file_name": self.result_file_name,
+                    "result_file_data": self.result_file_data
+                })
 
-        threading.Thread(target=run_with_logs, args=(_target, self)).start()
+        from .utils import LogWriter
+        log_writer = LogWriter(self._append_log)
+        threading.Thread(target=_target, args=(log_writer,), daemon=True).start()
 
 def create_launcher(pipeline: Pipeline) -> PipelineWidget:
     """Helper to create the widget."""
