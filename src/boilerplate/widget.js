@@ -9,7 +9,7 @@ export default {
         let pollInterval = null;
         const collapsedCategories = new Set();
 
-        // UTILITIES
+        // 1. UTILITIES
         const formatLog = (text) => {
             if (!text) return '';
             
@@ -34,7 +34,7 @@ export default {
             // Simplified ANSI parser
             html = html.replace(/\u001b\[([0-9;]+)m/g, (match, p1) => {
                 const codes = p1.split(';');
-                if (codes.includes('0')) return '</span>'.repeat(10); // Close potential nests
+                if (codes.includes('0')) return '</span>'.repeat(10); 
                 const styles = codes.map(c => colors[c]).filter(Boolean);
                 if (styles.length > 0) return `<span style="${styles.join(';')}">`;
                 return '';
@@ -78,40 +78,53 @@ export default {
             }
         };
 
-        // HANDLERS
-        const updateLogs = () => {
-            const logs = model.get('logs');
-            if (!logs) {
-                // NEVER auto-clear UI while running or if it was recently updated
-                // Only clear if explicitly empty and we are idle
-                if (model.get('status_state') !== 'running' && logOffset > 0 && logs === "") {
-                    clearUI();
-                }
-                return;
-            }
-            if (logs.length > logOffset) {
-                appendLogs(logs.substring(logOffset), logs.length);
-            } else if (logs.length < logOffset) {
-                // Backend reset for new run
-                clearUI();
-                appendLogs(logs, logs.length);
-            }
-        };
-
+        // 2. PRIMARY SYNC HANDLERS (MESSAGE BASED)
         const startPolling = () => {
-            if (!model.get('is_colab')) return;
+            // We ALWAYS poll. This ensures reliability in any network condition.
             clearPolling();
             pollInterval = setInterval(() => {
-                if (model.get('status_state') === 'running') {
+                const state = model.get('status_state');
+                if (state === 'running') {
                     model.send({ type: 'poll', offset: logOffset });
                 } else {
-                    model.send({ type: 'poll', offset: logOffset }); // Final catch-up
+                    // One final poll to catch race conditions at the end of a run
+                    model.send({ type: 'poll', offset: logOffset });
                     clearPolling();
-                    setTimeout(updateLogs, 500);
                 }
             }, 500);
         };
 
+        const handleCustomMessage = (msg) => {
+            if (msg.type === 'log_batch') {
+                if (msg.content) appendLogs(msg.content, msg.new_offset);
+                
+                // Status sync from message (very high priority source of truth)
+                if (msg.status && msg.status !== model.get('status_state')) {
+                    model.set('status_state', msg.status);
+                    updateStatus();
+                }
+            } else if (msg.type === 'run_finished') {
+                // Ensure everything is synced before stopping
+                if (msg.status) model.set('status_state', msg.status);
+                
+                // Sync result metadata if provided
+                if (msg.result_file_data) {
+                    model.set('result_file_data', msg.result_file_data);
+                    model.set('result_file_name', msg.result_file_name);
+                }
+                
+                // Catch any remaining logs in the final signal
+                if (msg.logs && msg.logs.length > logOffset) {
+                    appendLogs(msg.logs.substring(logOffset), msg.logs.length);
+                }
+                
+                clearPolling();
+                updateStatus();
+                updateDownloadButton();
+            }
+        };
+
+        // 3. UI STATE UPDATERS
         const updateStatus = () => {
             const state = model.get('status_state');
             const indicator = container.querySelector('.status-indicator');
@@ -146,32 +159,6 @@ export default {
             }
         };
 
-        const handleCustomMessage = (msg) => {
-            if (msg.type === 'log_batch') {
-                if (msg.content) appendLogs(msg.content, msg.new_offset);
-                if (msg.status && msg.status !== model.get('status_state')) {
-                    model.set('status_state', msg.status);
-                    updateStatus();
-                }
-            } else if (msg.type === 'run_finished') {
-                if (msg.status) model.set('status_state', msg.status);
-                
-                // Sync results from message (Colab reliability)
-                if (msg.result_file_data) {
-                    model.set('result_file_data', msg.result_file_data);
-                    model.set('result_file_name', msg.result_file_name);
-                }
-                
-                if (msg.logs && msg.logs.length > logOffset) {
-                    appendLogs(msg.logs.substring(logOffset), msg.logs.length);
-                }
-                clearPolling();
-                updateStatus();
-                updateDownloadButton();
-                setTimeout(updateLogs, 500);
-            }
-        };
-
         const updateDownloadButton = () => {
             const btn = container.querySelector('.btn-download');
             if (btn) {
@@ -180,12 +167,12 @@ export default {
             }
         };
 
-        // UI RENDERER
+        // 4. MAIN RENDERER
         function renderUI() {
             rootInner();
             updateStatus();
-            updateLogs();
             updateDownloadButton();
+            // Note: We don't call updateLogs here because we strictly use messages now.
         }
 
         function rootInner() {
@@ -326,11 +313,10 @@ export default {
             };
         }
 
-        // LISTENERS (Registered ONCE)
-        model.on('change:logs', updateLogs);
-        model.on('change:status_state', updateStatus);
+        // 5. EVENT HANDLERS (Registered ONCE)
         model.on('msg:custom', handleCustomMessage);
-        model.on('change:result_file_data', updateDownloadButton);
+        
+        // We still listen for config changes to allow UI updates
         model.on('change:config', renderUI);
         model.on('change:params_schema', renderUI);
 
@@ -338,10 +324,7 @@ export default {
 
         return () => {
             clearPolling();
-            model.off('change:logs', updateLogs);
-            model.off('change:status_state', updateStatus);
             model.off('msg:custom', handleCustomMessage);
-            model.off('change:result_file_data', updateDownloadButton);
             model.off('change:config', renderUI);
             model.off('change:params_schema', renderUI);
         };

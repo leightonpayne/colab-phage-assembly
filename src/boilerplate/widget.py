@@ -32,8 +32,6 @@ class PipelineWidget(anywidget.AnyWidget):
     result_file_name = traitlets.Unicode("").tag(sync=True)
     result_file_data = traitlets.Unicode("").tag(sync=True)
     
-    is_colab = traitlets.Bool(False).tag(sync=True)
-    
     def __init__(self, pipeline: Pipeline, **kwargs):
         self.pipeline = pipeline
         
@@ -54,7 +52,6 @@ class PipelineWidget(anywidget.AnyWidget):
         kwargs.setdefault("params_schema", params_schema)
         kwargs.setdefault("config", config)
         kwargs.setdefault("params_values", initial_values)
-        kwargs.setdefault("is_colab", check_colab())
         
         # Initialize internal state BEFORE observers or super()
         self._log_history = "" 
@@ -73,13 +70,9 @@ class PipelineWidget(anywidget.AnyWidget):
         msg = str(text)
         with self._log_lock:
             self._log_history += msg
-            # Throttled sync to traitlet for local viewers/fallback
-            # Skip in Colab to avoid congestion
-            if not check_colab():
-                now = time.time()
-                if now - self._last_sync_time > self._sync_threshold:
-                    self.logs = self._log_history
-                    self._last_sync_time = now
+            # Note: We no longer sync to the 'logs' traitlet in real-time.
+            # Instead, we rely strictly on Polling and the final Finish signal.
+            # This prevents race conditions in high-latency environments.
             
         # File debug
         try:
