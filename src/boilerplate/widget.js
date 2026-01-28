@@ -190,8 +190,13 @@ export default {
         const updateDownloadButton = () => {
             const btn = container.querySelector('.btn-download');
             if (btn) {
+                // Show button if we at least have a filename (fallback mode)
+                const hasFilename = !!model.get('result_file_name');
+                btn.style.display = hasFilename ? 'flex' : 'none';
+                
+                // Dim it if data is still loading, but it remains clickable
                 const hasData = !!model.get('result_file_data');
-                btn.style.display = hasData ? 'flex' : 'none';
+                btn.style.opacity = hasData ? '1' : '0.7';
             }
         };
 
@@ -263,7 +268,19 @@ export default {
                     navigator.clipboard.writeText(container.querySelector('.log-content').innerText);
                 };
                 container.querySelector('.btn-download').onclick = () => {
-                    const a = document.createElement('a'); a.href = model.get('result_file_data'); a.download = model.get('result_file_name'); a.click();
+                    const data = model.get('result_file_data');
+                    const name = model.get('result_file_name');
+                    
+                    if (data) {
+                        // Standard browser download (Fastest/Local)
+                        const a = document.createElement('a'); 
+                        a.href = data; 
+                        a.download = name; 
+                        a.click();
+                    } else {
+                        // Fallback: Trigger native Colab download via backend message
+                        model.send({ type: 'download' });
+                    }
                 };
             }
 
@@ -356,6 +373,7 @@ export default {
         model.on('change:config', renderUI);
         model.on('change:params_schema', renderUI);
         model.on('change:result_file_data', updateDownloadButton);
+        model.on('change:result_file_name', updateDownloadButton);
 
         renderUI();
 

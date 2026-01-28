@@ -59,6 +59,7 @@ class PipelineWidget(anywidget.AnyWidget):
         self._log_lock = threading.Lock()
         self._last_sync_time = 0
         self._sync_threshold = 0.2 # 200ms
+        self._last_zip_path = None # Store path for native Colab download fallback
         
         super().__init__(**kwargs)
         self._setup_observers()
@@ -168,6 +169,9 @@ class PipelineWidget(anywidget.AnyWidget):
                         project_name = self.params_values.get("output_name", "phage_project")
                         zip_path = Path.cwd() / f"{project_name}_results.zip"
                         if zip_path.exists():
+                            self._last_zip_path = str(zip_path)
+                            self.result_file_name = zip_path.name
+                            
                             size_mb = zip_path.stat().st_size / (1024 * 1024)
                             if size_mb > 50:
                                 logger.warning(f"File is too large ({size_mb:.1f}MB) for widget download. Please use file explorer.")
@@ -175,7 +179,6 @@ class PipelineWidget(anywidget.AnyWidget):
                                 logger.info(f"Preparing download for {zip_path.name}...")
                                 with open(zip_path, "rb") as f:
                                     b64_data = base64.b64encode(f.read()).decode("utf-8")
-                                    self.result_file_name = zip_path.name
                                     self.result_file_data = f"data:application/zip;base64,{b64_data}"
                                 
                                 # Send explicit message as backup for Colab traitlet lag
@@ -212,6 +215,16 @@ class PipelineWidget(anywidget.AnyWidget):
                     msg["content"] = self._log_history[start_offset:]
                 
                 self.send(msg)
+
+        elif content.get("type") == "download":
+            # Native Colab Download Fallback
+            if self._last_zip_path and check_colab():
+                try:
+                    from google.colab import files
+                    files.download(self._last_zip_path)
+                except Exception as e:
+                    # Log error back to widget logs if possible
+                    self._append_log(f"\n✘ Native download error: {e}\n")
 
 
     def _on_action_requested(self, change):
