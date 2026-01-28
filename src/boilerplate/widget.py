@@ -6,6 +6,7 @@ import anywidget
 import traitlets
 from .core import Pipeline
 from .utils import run_with_logs, check_colab, keep_alive_thread
+from .logging import PipelineLogger
 
 class PipelineWidget(anywidget.AnyWidget):
     """Generic Pipeline Widget."""
@@ -100,8 +101,9 @@ class PipelineWidget(anywidget.AnyWidget):
         if not change.new: 
             return
         
-        # Reset flag immediately
+        # Reset flag
         self.run_requested = False
+        
         self.status_state = "running"
         self.status_message = "Pipeline running..."
         
@@ -112,88 +114,72 @@ class PipelineWidget(anywidget.AnyWidget):
         self.result_file_data = "" # Clear previous result
         self.result_file_name = ""
         
-        def append_log(text: str):
-            self._append_log(text)
-
-
-            
         def run_thread():
             # Clear debug file on new run
             with open("pipeline_debug.log", "w") as f:
                 f.write("--- NEW RUN ---\n")
                 
             try:
-                success = False
-
+                # Use our new professional logger
+                logger = PipelineLogger(self._append_log)
+                
                 from contextlib import redirect_stderr, redirect_stdout
-                from .utils import LogWriter
                 import base64
                 
-                log_writer = LogWriter(append_log)
-                
-                with redirect_stdout(log_writer), redirect_stderr(log_writer):
-                    append_log("❯ Starting Pipeline...\n")
-                    success = self.pipeline.run(self.params_values, log_writer)
+                with redirect_stdout(logger), redirect_stderr(logger):
+                    logger.stage("Starting Pipeline")
+                    success = self.pipeline.run(self.params_values, logger)
                 
                 if success:
-                    append_log("\n❯ Completed successfully!\n")
+                    logger.success("Completed successfully!")
                     self.status_state = "finished"
                     self.status_message = "Completed successfully"
-                    
-                    # Process result file
-                    try:
-                        project_name = self.params_values.get("output_name", "phage_project")
-                        import os
-                        zip_path = Path.cwd() / f"{project_name}_results.zip"
-                        if zip_path.exists():
-                            append_log(f"❯ Preparing download button for {zip_path.name}...\n")
-                            # Check size - limit to 50MB for widget performance
-                            size_mb = zip_path.stat().st_size / (1024 * 1024)
-                            if size_mb > 50:
-                                append_log(f"❯ File is too large ({size_mb:.1f}MB) for widget download. Please use file explorer.\n")
-                            else:
-                                with open(zip_path, "rb") as f:
-                                    b64_data = base64.b64encode(f.read()).decode("utf-8")
-                                    self.result_file_name = zip_path.name
-                                    self.result_file_data = f"data:application/zip;base64,{b64_data}"
-                                append_log("❯ Ready to download.\n")
-                    except Exception as e:
-                        append_log(f"❯ Error preparing download: {e}\n")
-                        
                 elif getattr(self.pipeline, "_stop_requested", False):
-                    append_log("\n❯ Pipeline was terminated.\n")
+                    logger.warning("Pipeline was terminated.")
                     self.status_state = "aborted"
                     self.status_message = "Terminated by user"
                 else:
-                    append_log("\n❯ Pipeline failed.\n")
+                    logger.error("Pipeline failed.")
                     self.status_state = "error"
                     self.status_message = "Failed"
                     
             except Exception as e:
                 import traceback
                 trace = traceback.format_exc()
-                append_log(f"\n❯ Exception: {e}\n{trace}\n")
+                self._append_log(f"\n✘ Critical Exception: {e}\n{trace}\n")
                 self.status_state = "error"
                 self.status_message = f"Error: {e}"
             
             finally:
-                # Wrap up
-                import time
-                time.sleep(0.1)
-                
+                # 1. Dispatch final logs and status IMMEDIATELY
                 with self._log_lock:
                     final_logs = self._log_history
-                    # Still update traitlet for consistency
-                    self.logs = final_logs
+                    self.logs = final_logs # Sync traitlet
                 
-                # Send explicit notification with payload for Colab reliability
                 self.send({
                     "type": "run_finished", 
                     "status": self.status_state,
-                    "logs": final_logs,
-                    "result_file_name": self.result_file_name,
-                    "result_file_data": self.result_file_data
+                    "logs": final_logs
                 })
+                
+                # 2. Heavy result file processing AFTER the UI is notified of completion
+                if self.status_state == "finished":
+                    try:
+                        project_name = self.params_values.get("output_name", "phage_project")
+                        zip_path = Path.cwd() / f"{project_name}_results.zip"
+                        if zip_path.exists():
+                            size_mb = zip_path.stat().st_size / (1024 * 1024)
+                            if size_mb > 50:
+                                logger.warning(f"File is too large ({size_mb:.1f}MB) for widget download. Please use file explorer.")
+                            else:
+                                logger.info(f"Preparing download for {zip_path.name}...")
+                                with open(zip_path, "rb") as f:
+                                    b64_data = base64.b64encode(f.read()).decode("utf-8")
+                                    self.result_file_name = zip_path.name
+                                    self.result_file_data = f"data:application/zip;base64,{b64_data}"
+                                logger.success("Download ready.")
+                    except Exception as e:
+                        logger.error(f"Error preparing download: {e}")
         
         # Run in thread to not block UI
         threading.Thread(target=run_thread, daemon=True).start()
@@ -234,17 +220,18 @@ class PipelineWidget(anywidget.AnyWidget):
             self._log_history = ""
             self.logs = ""
             
-        self._append_log(f"❯ Executing action: {action_name}...\n")
-        
-        def _target(logger):
+        def _target(action_name):
+            logger = PipelineLogger(self._append_log)
+            logger.stage(f"Executing action: {action_name}")
             try:
                 success = self.pipeline.handle_action(action_name, logger)
                 self.status_state = "idle" if success else "error"
             except Exception as e:
-                logger.write(f"❯ Action error: {str(e)}\n")
+                logger.error(f"Action error: {str(e)}")
                 self.status_state = "error"
             finally:
                 # Wrap up
+                import time
                 time.sleep(0.1)
                 with self._log_lock:
                     final_logs = self._log_history
@@ -258,9 +245,7 @@ class PipelineWidget(anywidget.AnyWidget):
                     "result_file_data": self.result_file_data
                 })
 
-        from .utils import LogWriter
-        log_writer = LogWriter(self._append_log)
-        threading.Thread(target=_target, args=(log_writer,), daemon=True).start()
+        threading.Thread(target=_target, args=(action_name,), daemon=True).start()
 
 def create_launcher(pipeline: Pipeline) -> PipelineWidget:
     """Helper to create the widget."""

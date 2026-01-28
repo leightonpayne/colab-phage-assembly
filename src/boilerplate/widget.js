@@ -52,13 +52,13 @@ export default {
         };
 
         const appendLogs = (text, totalLength) => {
-            if (!text) return;
+            if (!text || text.length === 0) return;
             const content = container.querySelector('.log-content');
             if (!content) return;
 
+            // Clear placeholder on first real content
             if (content.querySelector('.ready-placeholder')) {
                 content.innerHTML = '';
-                logOffset = 0;
             }
 
             content.insertAdjacentHTML('beforeend', formatLog(text));
@@ -81,22 +81,43 @@ export default {
         // 2. PRIMARY SYNC HANDLERS (MESSAGE BASED)
         const startPolling = () => {
             // We ALWAYS poll. This ensures reliability in any network condition.
-            clearPolling();
-            pollInterval = setInterval(() => {
-                const state = model.get('status_state');
-                if (state === 'running') {
-                    model.send({ type: 'poll', offset: logOffset });
-                } else {
-                    // One final poll to catch race conditions at the end of a run
-                    model.send({ type: 'poll', offset: logOffset });
-                    clearPolling();
-                }
-            }, 500);
+            if (pollInterval) return; // Already running
+            
+            const scheduleNext = () => {
+                pollInterval = setTimeout(() => {
+                    const state = model.get('status_state');
+                    if (state === 'running') {
+                        model.send({ type: 'poll', offset: logOffset });
+                        scheduleNext();
+                    } else {
+                        // One final poll to catch race conditions at the end of a run
+                        model.send({ type: 'poll', offset: logOffset });
+                        pollInterval = null;
+                    }
+                }, 250);
+            };
+            scheduleNext();
         };
 
         const handleCustomMessage = (msg) => {
             if (msg.type === 'log_batch') {
-                if (msg.content) appendLogs(msg.content, msg.new_offset);
+                // VERY IMPORTANT: Only process logs beyond our current offset to avoid repetition
+                // from multiple widget instances or stale poll responses.
+                if (msg.new_offset !== undefined && msg.new_offset > logOffset) {
+                    const content = msg.content || '';
+                    const msgStartOffset = msg.new_offset - content.length;
+                    
+                    if (msgStartOffset >= logOffset) {
+                        // Perfect match or gap (append all)
+                        appendLogs(content, msg.new_offset);
+                    } else {
+                        // Overlap (append only the new part)
+                        const overlap = logOffset - msgStartOffset;
+                        if (overlap < content.length) {
+                            appendLogs(content.substring(overlap), msg.new_offset);
+                        }
+                    }
+                }
                 
                 // Status sync from message (very high priority source of truth)
                 if (msg.status && msg.status !== model.get('status_state')) {
@@ -113,7 +134,7 @@ export default {
                     model.set('result_file_name', msg.result_file_name);
                 }
                 
-                // Catch any remaining logs in the final signal
+                // Catch any remaining logs in the final signal, using same deduplication
                 if (msg.logs && msg.logs.length > logOffset) {
                     appendLogs(msg.logs.substring(logOffset), msg.logs.length);
                 }
@@ -321,6 +342,7 @@ export default {
         // We still listen for config changes to allow UI updates
         model.on('change:config', renderUI);
         model.on('change:params_schema', renderUI);
+        model.on('change:result_file_data', updateDownloadButton);
 
         renderUI();
 

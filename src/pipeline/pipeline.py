@@ -66,7 +66,7 @@ class PhagePipeline(Pipeline):
 
     def _run_cmd(self, cmd: str, logger, cwd: Optional[Path] = None):
         if self._stop_requested:
-            logger.write("❯ Pipeline execution aborted.\n")
+            logger.warning("Pipeline execution aborted.")
             return -1
 
         # Diagnostics
@@ -82,7 +82,7 @@ class PhagePipeline(Pipeline):
         if python_bin not in env.get("PATH", ""):
             env["PATH"] = python_bin + os.pathsep + env.get("PATH", "")
 
-        logger.write(f"Executing: {cmd}\n")
+        logger.command(cmd)
         # Allow time for the widget log to flush to the UI
         time.sleep(0.1)
         
@@ -138,7 +138,7 @@ class PhagePipeline(Pipeline):
                 logger.write("".join(output_buffer))
                     
         except Exception as e:
-            logger.write(f"Error reading output: {e}\n")
+            logger.error(f"Error reading output: {e}")
             
         self._current_process.wait()
         ret = self._current_process.returncode
@@ -215,8 +215,8 @@ class PhagePipeline(Pipeline):
 
     def handle_action(self, action_name: str, logger) -> bool:
         if action_name == "install_pharokka_db":
-            logger.write("❯ Starting Pharokka database installation...\n")
-            logger.write("❯ This will download several gigabytes and may take 10-20 minutes depending on speed.\n")
+            logger.step("Starting Pharokka database installation...")
+            logger.info("This will download several gigabytes and may take 10-20 minutes.")
             
             # Try newer command first, then fallback to older one
             # -d uses default directory, -f forces re-download
@@ -230,74 +230,64 @@ class PhagePipeline(Pipeline):
                 if self._find_command([base_cmd]):
                     ret = self._run_cmd(cmd_with_args, logger)
                     if ret == 0:
-                        logger.write("❯ Pharokka databases installed successfully!\n")
+                        logger.success("Pharokka databases installed successfully!")
                         return True
                     else:
-                        logger.write(f"❯ Command {base_cmd} failed (exit code {ret}). Trying next...\n")
+                        logger.warning(f"Command {base_cmd} failed (exit code {ret}). Trying next...")
             
-            logger.write("❯ All Pharokka database installation commands failed.\n")
+            logger.error("All Pharokka database installation commands failed.")
             return False
         return super().handle_action(action_name, logger)
 
     def run(self, params: Dict[str, Any], logger) -> bool:
         self._stop_requested = False
         
-        # Defensive: Ensure logger works immediately
-        try:
-            logger.write("❯ Initializing...\n")
-        except Exception as e:
-            print(f"Logger failed: {e}")
-            return False
-
         try:
             project_name = params.get("output_name", "phage_project")
             output_dir = Path.cwd() / project_name
             output_dir.mkdir(parents=True, exist_ok=True)
             
-            logger.write(f"❯ Project name: {project_name}\n")
-            logger.write(f"❯ Output directory: {output_dir}\n")
+            logger.info(f"Initializing project: {project_name}")
+            logger.info(f"Output directory: {output_dir}")
             
-            # Debug params
-            logger.write(f"DEBUG: Params received: {str(params)}\n")
-
             # 1. Inputs
-            logger.write("\n--- Stage: Input Validation ---\n")
+            logger.stage("Input Validation")
             
             r1 = params.get("short_r1")
             r2 = params.get("short_r2")
             
-            logger.write(f"R1: {r1}\n")
-            logger.write(f"R2: {r2}\n")
+            logger.info(f"R1: {r1}")
+            logger.info(f"R2: {r2}")
 
             if not r1:
-                logger.write("❯ Error: R1 input is required. Please provide a path to the first fastq file.\n")
+                logger.error("R1 input is required. Please provide a path to the first fastq file.")
                 return False
 
             if not Path(r1).exists():
-                logger.write(f"❯ Error: R1 file not found at: {r1}\n")
+                logger.error(f"R1 file not found at: {r1}")
                 return False
                 
             if r2 and not Path(r2).exists():
-                logger.write(f"❯ Error: R2 file not found at: {r2}\n")
+                logger.error(f"R2 file not found at: {r2}")
                 return False
                 
         except Exception as e:
-            logger.write(f"❯ Critical Error during setup: {e}\n")
+            logger.error(f"Critical Error during setup: {e}")
             import traceback
-            logger.write(traceback.format_exc())
+            logger.plain(traceback.format_exc())
             return False
 
         # 2. Preprocessing
         trimmed_r1, trimmed_r2 = r1, r2
         if params.get("run_fastqc"):
             if self._stop_requested: return False
-            logger.write("\n--- Stage: FastQC ---\n")
+            logger.stage("FastQC")
             fq_cmd = f"fastqc -o {output_dir} {r1} {r2 if r2 else ''}"
             self._run_cmd(fq_cmd, logger)
 
         if params.get("run_trimming") and (r1 or r2):
             if self._stop_requested: return False
-            logger.write("\n--- Stage: TrimGalore ---\n")
+            logger.stage("TrimGalore")
             trim_cmd = f"trim_galore --paired --output_dir {output_dir} {r1} {r2}" if r2 else f"trim_galore --output_dir {output_dir} {r1}"
             if self._run_cmd(trim_cmd, logger) == 0:
                 def get_base(filepath):
@@ -316,44 +306,46 @@ class PhagePipeline(Pipeline):
 
         # 3. Assembly
         if self._stop_requested: return False
-        logger.write("\n--- Stage: Assembly (Unicycler) ---\n")
+        logger.stage("Assembly")
         assembly_out = output_dir / "assembly"
         mode = params.get("unicycler_mode", "normal")
         
         if trimmed_r1 and trimmed_r2:
-            logger.write("❯ Mode: Paired-end Short-read Assembly\n")
+            logger.info("Mode: Paired-end Short-read Assembly")
             asm_cmd = f"unicycler -1 {trimmed_r1} -2 {trimmed_r2} -o {assembly_out} --mode {mode}"
         elif trimmed_r1:
-            logger.write("❯ Mode: Single-end Short-read Assembly\n")
+            logger.info("Mode: Single-end Short-read Assembly")
             asm_cmd = f"unicycler -s {trimmed_r1} -o {assembly_out} --mode {mode}"
         else:
-            logger.write("❯ Error: No valid short-read inputs for assembly.\n")
+            logger.error("No valid short-read inputs for assembly.")
             return False
 
         if self._run_cmd(asm_cmd, logger) != 0:
-            logger.write("❯ Assembly failed.\n")
+            logger.error("Assembly failed.")
             return False
 
         fasta_out = assembly_out / "assembly.fasta"
         if not fasta_out.exists():
-            logger.write(f"❯ Assembly file not found at {fasta_out}\n")
+            logger.error(f"Assembly file not found at {fasta_out}")
             return False
+            
+        logger.success("Assembly completed.")
 
         # 4. Quality Check
         if params.get("run_quast"):
             if self._stop_requested: return False
-            logger.write("\n--- Stage: QUAST ---\n")
+            logger.stage("Quality Check")
             quast_out = output_dir / "quast"
             self._run_cmd(f"quast.py {fasta_out} -o {quast_out}", logger)
+            logger.success("Quality evaluation finished.")
 
         # 5. Annotation Chain
         current_fasta = fasta_out
-
         annotation_success = True
 
         if params.get("run_pharokka"):
             if self._stop_requested: return False
-            logger.write("\n--- Stage: Pharokka ---\n")
+            logger.stage("Pharokka")
             
             # Automatically apply bug fix to Pharokka scripts in the current environment
             self._auto_patch_pharokka(logger)
@@ -364,26 +356,24 @@ class PhagePipeline(Pipeline):
                 pharokka_out = output_dir / "pharokka"
                 
                 # Calculate DB path: python_bin is .../bin, databases are .../databases
-                # Calculate DB path: python_bin is .../bin, databases are .../databases
                 python_bin = Path(sys.executable).parent
                 db_dir = python_bin.parent / "databases"
                 
                 cmd = f"pharokka.py -i {current_fasta} -o {pharokka_out} -t 4 -f -d {db_dir}"
                 if self._run_cmd(cmd, logger) == 0:
-                     pass # Success, files are in output_dir
+                     logger.success("Pharokka annotation complete.")
                 else:
-                    logger.write("❯ Pharokka failed. Check if databases are installed (run: pharokka_database.py --install)\n")
+                    logger.error("Pharokka failed. Check if databases are installed.")
                     annotation_success = False
             else:
-                logger.write("❯ Pharokka command not working or databases missing.\n")
+                logger.error("Pharokka command not working or databases missing.")
                 annotation_success = False
 
-
         if not annotation_success:
-            logger.write("\n❯ Warning: Some annotation steps failed. Results will be incomplete.\n")
+            logger.warning("Some annotation steps failed. Results will be incomplete.")
 
         # 6. Output Packaging
-        logger.write("\n--- Stage: Finalizing Output ---\n")
+        logger.stage("Finalizing Output")
         
         zip_path = Path.cwd() / f"{project_name}_results.zip"
         file_count = 0
@@ -402,26 +392,26 @@ class PhagePipeline(Pipeline):
                         file_count += 1
             
             if file_count > 0:
-                logger.write(f"❯ Packaged {file_count} results into {zip_path.name}\n")
+                logger.success(f"Packaged {file_count} results into {zip_path.name}")
             else:
-                logger.write("❯ Warning: No result files found to package.\n")
+                logger.warning("No result files found to package.")
                 
         except Exception as e:
-            logger.write(f"❯ Error during zipping: {e}\n")
+            logger.error(f"Error during zipping: {e}")
             return False
             
-        logger.write(f"\n❯ Final results zipped at: {zip_path}\n")
+        logger.info(f"Final results zipped at: {zip_path}")
         
         if annotation_success:
-            logger.write("❯ Pipeline completed successfully!\n")
+            logger.success("Pipeline completed successfully!")
         else:
-            logger.write("❯ Pipeline completed with warnings (some stages failed).\n")
+            logger.warning("Pipeline completed with warnings (some stages failed).")
 
         # Setup for download in Colab
         try:
             from google.colab import files
             files.download(str(zip_path))
-            logger.write("❯ Triggered download of results zip.\n")
+            logger.info("Triggered download of results zip.")
         except ImportError:
             pass
 
