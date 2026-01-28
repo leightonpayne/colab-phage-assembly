@@ -190,13 +190,82 @@ export default {
 
         // 4. MAIN RENDERER
         function renderUI() {
-            rootInner();
+            // Check if we need to initialize the main skeleton
+            if (!container.querySelector('.pl-launcher')) {
+                const config = model.get('config') || {};
+                container.innerHTML = `
+                    <style>
+                        @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+                        .pl-launcher { background: #ffffff; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
+                        .pl-header { border-bottom: 2px solid #f1f5f9; padding-bottom: 20px; margin-bottom: 24px; }
+                        .pl-title { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 12px; }
+                        .pl-subtitle { font-size: 14px; color: #64748b; margin-top: 4px; }
+                        .cat-section { margin-bottom: 16px; border: 1px solid #f1f5f9; border-radius: 14px; overflow: hidden; }
+                        .cat-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; cursor: pointer; user-select: none; }
+                        .cat-badge { display: inline-flex; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
+                        .cat-toggle { transition: transform 0.2s; color: #64748b; }
+                        .cat-toggle.is-collapsed { transform: rotate(-90deg); }
+                        .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; background: #f8fafc; padding: 20px; }
+                        .cat-grid.is-collapsed { display: none; }
+                        .param-item { display: flex; flex-direction: column; gap: 6px; }
+                        .param-label { font-size: 14px; font-weight: 600; color: #334155; }
+                        .param-desc { font-size: 11px; color: #64748b; line-height: 1.5; }
+                        .param-input { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #1e293b; font-family: inherit; }
+                        .param-switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
+                        .btn-action { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
+                        .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
+                        .btn-run { color: #fff; border: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
+                        .btn-download { background: #10b981; color: white; border: none; padding: 14px 24px; border-radius: 10px; font-weight: 700; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-right: 12px; }
+                        .log-box { margin-top: 32px; background: #0f172a; border-radius: 12px; overflow: hidden; border: 1px solid #1e293b; }
+                        .log-header { background: #1e293b; padding: 10px 16px; font-size: 12px; font-weight: 700; color: #94a3b8; display: flex; justify-content: space-between; }
+                        .log-content { padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e2e8f0; max-height: 350px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; }
+                        .btn-copy { background: transparent; border: none; font-size: 11px; font-weight: 700; color: #64748b; cursor: pointer; display: flex; align-items: center; gap: 6px; }
+                        .ready-placeholder { color: #475569; font-style: italic; }
+                    </style>
+                    <div class="pl-launcher">
+                        <div class="pl-header">
+                            <h2 class="pl-title">
+                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg>
+                                ${config.title || 'Pipeline Launcher'}
+                            </h2>
+                            <div class="pl-subtitle">${config.subtitle || 'Configure and run your pipeline'}</div>
+                        </div>
+                        <div class="params-container"></div>
+                        <div class="footer" style="display: flex; justify-content: flex-end; margin-top: 20px;">
+                            <button class="btn-download" style="display: none;">
+                                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download Results
+                            </button>
+                            <button class="btn-run"></button>
+                        </div>
+                        <div class="log-box">
+                            <div class="log-header">
+                                <div style="display: flex; align-items: center; gap: 16px;">
+                                    <span>EXECUTION LOGS</span>
+                                    <button class="btn-copy">
+                                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> COPY LOGS
+                                    </button>
+                                </div>
+                                <span class="status-indicator">● IDLE</span>
+                            </div>
+                            <div class="log-content">Ready...</div>
+                        </div>
+                    </div>
+                `;
+
+                container.querySelector('.btn-copy').onclick = () => {
+                    navigator.clipboard.writeText(container.querySelector('.log-content').innerText);
+                };
+                container.querySelector('.btn-download').onclick = () => {
+                    const a = document.createElement('a'); a.href = model.get('result_file_data'); a.download = model.get('result_file_name'); a.click();
+                };
+            }
+
+            renderParams();
             updateStatus();
             updateDownloadButton();
-            // Note: We don't call updateLogs here because we strictly use messages now.
         }
 
-        function rootInner() {
+        function renderParams() {
             const config = model.get('config') || {};
             const paramsSchema = model.get('params_schema') || {};
 
@@ -208,66 +277,10 @@ export default {
                 initialized = true;
             }
 
-            container.innerHTML = `
-                <style>
-                    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
-                    .pl-launcher { background: #ffffff; color: #1e293b; border: 1px solid #e2e8f0; border-radius: 16px; padding: 24px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; }
-                    .pl-header { border-bottom: 2px solid #f1f5f9; padding-bottom: 20px; margin-bottom: 24px; }
-                    .pl-title { font-size: 22px; font-weight: 700; color: #0f172a; margin: 0; display: flex; align-items: center; gap: 12px; }
-                    .pl-subtitle { font-size: 14px; color: #64748b; margin-top: 4px; }
-                    .cat-section { margin-bottom: 16px; border: 1px solid #f1f5f9; border-radius: 14px; overflow: hidden; }
-                    .cat-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 20px; cursor: pointer; user-select: none; }
-                    .cat-badge { display: inline-flex; padding: 4px 12px; border-radius: 9999px; font-size: 11px; font-weight: 700; text-transform: uppercase; }
-                    .cat-toggle { transition: transform 0.2s; color: #64748b; }
-                    .cat-toggle.is-collapsed { transform: rotate(-90deg); }
-                    .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; background: #f8fafc; padding: 20px; }
-                    .cat-grid.is-collapsed { display: none; }
-                    .param-item { display: flex; flex-direction: column; gap: 6px; }
-                    .param-label { font-size: 14px; font-weight: 600; color: #334155; }
-                    .param-desc { font-size: 11px; color: #64748b; line-height: 1.5; }
-                    .param-input { background: #fff; border: 1px solid #cbd5e1; border-radius: 8px; padding: 10px 12px; font-size: 13px; color: #1e293b; font-family: inherit; }
-                    .param-switch { display: flex; align-items: center; gap: 10px; cursor: pointer; }
-                    .btn-action { background: #f1f5f9; color: #475569; border: 1px solid #e2e8f0; padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; }
-                    .btn-action:disabled { opacity: 0.5; cursor: not-allowed; }
-                    .btn-run { color: #fff; border: none; padding: 14px 32px; border-radius: 10px; font-weight: 700; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; }
-                    .btn-download { background: #10b981; color: white; border: none; padding: 14px 24px; border-radius: 10px; font-weight: 700; font-size: 15px; cursor: pointer; display: flex; align-items: center; gap: 10px; margin-right: 12px; }
-                    .log-box { margin-top: 32px; background: #0f172a; border-radius: 12px; overflow: hidden; border: 1px solid #1e293b; }
-                    .log-header { background: #1e293b; padding: 10px 16px; font-size: 12px; font-weight: 700; color: #94a3b8; display: flex; justify-content: space-between; }
-                    .log-content { padding: 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: #e2e8f0; max-height: 350px; overflow-y: auto; white-space: pre-wrap; line-height: 1.6; }
-                    .btn-copy { background: transparent; border: none; font-size: 11px; font-weight: 700; color: #64748b; cursor: pointer; display: flex; align-items: center; gap: 6px; }
-                    .ready-placeholder { color: #475569; font-style: italic; }
-                </style>
-                <div class="pl-launcher">
-                    <div class="pl-header">
-                        <h2 class="pl-title">
-                            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M12 2v20M2 12h20M5.5 5.5l13 13M18.5 5.5l-13 13"/></svg>
-                            ${config.title || 'Pipeline Launcher'}
-                        </h2>
-                        <div class="pl-subtitle">${config.subtitle || 'Configure and run your pipeline'}</div>
-                    </div>
-                    <div class="params-container"></div>
-                    <div class="footer" style="display: flex; justify-content: flex-end; margin-top: 20px;">
-                        <button class="btn-download" style="display: none;">
-                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg> Download Results
-                        </button>
-                        <button class="btn-run"></button>
-                    </div>
-                    <div class="log-box">
-                        <div class="log-header">
-                            <div style="display: flex; align-items: center; gap: 16px;">
-                                <span>EXECUTION LOGS</span>
-                                <button class="btn-copy">
-                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> COPY LOGS
-                                </button>
-                            </div>
-                            <span class="status-indicator">● IDLE</span>
-                        </div>
-                        <div class="log-content">Ready...</div>
-                    </div>
-                </div>
-            `;
-
             const paramsContainer = container.querySelector('.params-container');
+            if (!paramsContainer) return;
+
+            paramsContainer.innerHTML = ''; // Only clear the params, not the whole widget
             Object.keys(paramsSchema).forEach(cat => {
                 const isCollapsed = collapsedCategories.has(cat);
                 const section = document.createElement('div');
@@ -286,7 +299,7 @@ export default {
                 section.querySelector('.cat-header').onclick = () => {
                     if (collapsedCategories.has(cat)) collapsedCategories.delete(cat);
                     else collapsedCategories.add(cat);
-                    renderUI();
+                    renderParams();
                 };
 
                 const grid = section.querySelector('.cat-grid');
@@ -325,13 +338,6 @@ export default {
                 });
                 paramsContainer.appendChild(section);
             });
-
-            container.querySelector('.btn-copy').onclick = () => {
-                navigator.clipboard.writeText(container.querySelector('.log-content').innerText);
-            };
-            container.querySelector('.btn-download').onclick = () => {
-                const a = document.createElement('a'); a.href = model.get('result_file_data'); a.download = model.get('result_file_name'); a.click();
-            };
         }
 
         // 5. EVENT HANDLERS (Registered ONCE)

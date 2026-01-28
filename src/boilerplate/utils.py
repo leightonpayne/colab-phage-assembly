@@ -20,11 +20,11 @@ def setup_colab():
     logger = PipelineLogger()
     
     if subprocess.call("which pixi", shell=True) != 0:
-        logger.step("Installing Pixi...")
+        logger.info("Installing Pixi...")
         subprocess.run("curl -fsSL https://pixi.sh/install.sh | bash", shell=True, check=True)
         os.environ["PATH"] += os.pathsep + str(Path.home() / ".pixi/bin")
         
-    logger.step("Installing tools from pixi.lock...")
+    logger.info("Installing tools from pixi.lock...")
     subprocess.run("pixi install", shell=True, check=True)
     
     pixi_env_bin = Path.cwd() / ".pixi/envs/default/bin"
