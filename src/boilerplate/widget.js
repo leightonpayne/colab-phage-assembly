@@ -316,6 +316,8 @@ export default {
         // 5. EVENT HANDLERS (Registered ONCE)
         model.on('msg:custom', handleCustomMessage);
         
+        model.on('change:status_state', updateStatus);
+        
         // We still listen for config changes to allow UI updates
         model.on('change:config', renderUI);
         model.on('change:params_schema', renderUI);
