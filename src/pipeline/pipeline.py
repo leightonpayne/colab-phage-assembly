@@ -34,7 +34,7 @@ class PhagePipeline(Pipeline):
 
     def define_parameters(self) -> List[PipelineParameter]:
         return [
-            PipelineParameter(name="install_pharokka_db", type="button", label="Install Pharokka DB", description="Download and index Pharokka databases (this can take 10-15 mins, but only needs to be run once per session)", category="Setup"),
+            PipelineParameter(name="install_pharokka_db", type="button", label="Install Pharokka DB", description="Download and index Pharokka databases (this can take 10-20 mins, but only needs to be run once per session)", category="Setup"),
             
             PipelineParameter(name="output_name", type="text", label="Project Name", description="Prefix for output files", default="phage_project", category="Data & Output"),
             PipelineParameter(name="short_r1", type="text", label="Short Reads R1", description="Path or upload for FASTQ R1 (Forward)", category="Data & Output"),

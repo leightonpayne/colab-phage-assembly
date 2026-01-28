@@ -124,6 +124,13 @@ export default {
                     model.set('status_state', msg.status);
                     updateStatus();
                 }
+            } else if (msg.type === 'result_ready') {
+                // Priority sync for heavy result data via message
+                if (msg.data) {
+                    model.set('result_file_data', msg.data);
+                    model.set('result_file_name', msg.name);
+                    updateDownloadButton();
+                }
             } else if (msg.type === 'run_finished') {
                 // Ensure everything is synced before stopping
                 if (msg.status) model.set('status_state', msg.status);

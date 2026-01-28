@@ -177,6 +177,13 @@ class PipelineWidget(anywidget.AnyWidget):
                                     b64_data = base64.b64encode(f.read()).decode("utf-8")
                                     self.result_file_name = zip_path.name
                                     self.result_file_data = f"data:application/zip;base64,{b64_data}"
+                                
+                                # Send explicit message as backup for Colab traitlet lag
+                                self.send({
+                                    "type": "result_ready",
+                                    "name": self.result_file_name,
+                                    "data": self.result_file_data
+                                })
                                 logger.success("Download ready.")
                     except Exception as e:
                         logger.error(f"Error preparing download: {e}")
